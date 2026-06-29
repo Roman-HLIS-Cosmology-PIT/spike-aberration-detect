@@ -3,7 +3,7 @@
 name = "spike-aberration-detect"
 license = "MIT"
 license-files = ["LICENSE"]
-readme = "README.md"
+readme = "README.rst"
 authors = [
     { name = "David Kuhtenia", email = "kuhtenia.3@osu.edu" }
 ]
@@ -14,29 +14,24 @@ classifiers = [
     "Operating System :: OS Independent",
     "Programming Language :: Python",
 ]
-dynamic = ["version"]
-requires-python = ">=3.10"
-dependencies = [
-]
+dynamic = ["version", "dependencies", "optional-dependencies"]
+requires-python = ">=3.12"
+
+[tool.setuptools.dynamic]
+dependencies = { file = "requirements.txt" }
 
 [project.urls]
 "Source Code" = "https://github.com/Roman-HLIS-Cosmology-PIT/spike-aberration-detect"
 
 # On a mac, install optional dependencies with `pip install '.[dev]'` (include the single quotes)
-[project.optional-dependencies]
-dev = [
-    "asv[virtualenv]==0.6.5", # Used to compute performance benchmarks
-    "jupyter", # Clears output from Jupyter notebooks
-    "pre-commit", # Used to run checks before finalizing a git commit
-    "pytest",
-    "pytest-cov", # Used to report total code coverage
-    "ruff", # Used for static linting of files
-]
+[tool.setuptools.dynamic.optional-dependencies]
+dev = { file = "requirements-dev.txt" }
+
 
 [build-system]
 requires = [
-    "setuptools>=62", # Used to build and package the Python project
-    "setuptools_scm>=6.2", # Gets release version from git. Makes it available programmatically
+    "setuptools>=82.0.1", # Used to build and package the Python project
+    "setuptools_scm>=10.0.5", # Gets release version from git. Makes it available programmatically
 ]
 build-backend = "setuptools.build_meta"
 
