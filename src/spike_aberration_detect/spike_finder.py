@@ -81,9 +81,9 @@ def find_spikes(
         th_max = ((cutoff - sums[idx_max_l]) / slope_right) + angles[idx_max_l]
 
         # print( f'{sums[idx_min_l]:.3f}, {sums[idx_min_r]:.3f} and {sums[idx_max_l]:.3f}, {sums[idx_max_r]:.3f}' )
-        print(
-            f"{angles[idx_min_l]:.2f}, {angles[idx_min_r]:.2f} and {angles[idx_max_l]:.2f}, {angles[idx_max_r]:.2f}. interpolated as {th_min:.2f}, {th_max:.2f}"
-        )
+        # print(
+        #     f"{angles[idx_min_l]:.2f}, {angles[idx_min_r]:.2f} and {angles[idx_max_l]:.2f}, {angles[idx_max_r]:.2f}. interpolated as {th_min:.2f}, {th_max:.2f}"
+        # )
 
         # spike_list[i] = np.median( spike_groups[i] )
         spike_list[i] = (th_min + th_max) / 2.0
