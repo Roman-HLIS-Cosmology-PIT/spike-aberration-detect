@@ -2,7 +2,11 @@ import numpy as np
 import scipy.interpolate as sp_itp
 
 
-def line_coords(angle, bound, center=np.array((0, 0))):
+# def line_coords(angle, bound, center=np.array((0, 0))):
+def line_coords(angle, bound, center=(0, 0)):
+    """
+    Get a pixelated line at a specified origin, angle, and length.
+    """
     # since (0, 0) in data coords is top left instead of bottom left we must use clockwise rotations to get
     # a visually ccl rotation. However we will take a transpose later anyways so the rotation matrix def is ccl, as expected. How quaint
     angle = np.deg2rad(angle)
@@ -26,9 +30,10 @@ def line_coords(angle, bound, center=np.array((0, 0))):
     return np.int32(rotation.T @ line) + np.int32(np.reshape(center, (2, 1)))
 
 
-def find_spikes(
-    image, step, bound=1024, center=np.array((0, 0)), borders=(0.0, 1.0), threshold=0.5, verbose=False
-):
+def find_spikes(image, step, bound=1024, center=(0, 0), borders=(0.0, 1.0), threshold=0.5, verbose=False):
+    """
+    Given an image of a PSF, find the diffraction spikes within.
+    """
     angles = np.linspace(0, 360, num=np.int32(360.0 / step), endpoint=False)
 
     lines = line_coords(angles, bound, center)
@@ -95,7 +100,10 @@ def find_spikes(
         return spike_list
 
 
-def draw_ray(ax, angle, bound, center=np.array((0, 0)), borders=(0.0, 1.0), **kwargs):
+def draw_ray(ax, angle, bound, center=(0, 0), borders=(0.0, 1.0), **kwargs):
+    """
+    Draws a line segment on an image at a specified origin, and length.
+    """
     line = line_coords(angle, bound, center)
     range_low = np.int_(borders[0] * bound)
     range_high = np.int_(borders[1] * bound)
@@ -104,6 +112,9 @@ def draw_ray(ax, angle, bound, center=np.array((0, 0)), borders=(0.0, 1.0), **kw
 
 
 def downsample_2d_image(image, pixel_size=8):  # ONLY WORKS ON 2D IMAGES
+    """
+    Downsaples a 2D image by taking the mean of subpixels of a specified size.
+    """
     subpixel_side = np.arange(pixel_size)
     subpixel_cols, subpixel_rows = np.meshgrid(subpixel_side, subpixel_side)
 
@@ -126,6 +137,9 @@ def downsample_2d_image(image, pixel_size=8):  # ONLY WORKS ON 2D IMAGES
 
 
 def poisson_resample_image(img, flux_factor):
+    """
+    Resamples an image using a per-pixel poisson distribution.
+    """
     # resamples an image where each pixel gets its own poisson distribution
     # this will change the scales around so that the resulting image has large positive values!!!! be aware
     rng = np.random.default_rng()
@@ -136,6 +150,9 @@ def poisson_resample_image(img, flux_factor):
 
 
 def interpolate_image(img, dense_size):  # 2D ONLY
+    """
+    Linearly interpolates a 2D image and returns another, denser image.
+    """
     x_pts = np.arange(img.shape[0])
     y_pts = np.arange(img.shape[1])
 
