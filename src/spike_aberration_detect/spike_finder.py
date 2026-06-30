@@ -8,9 +8,9 @@ def line_coords(angle, bound, center=(0, 0)):
     Get a pixelated line at a specified origin, angle, and length.
     """
     # since (0, 0) in data coords is top left instead of bottom left we must use clockwise rotations to get
-    # a visually ccl rotation. However we will take a transpose later anyways so the rotation matrix def is ccl, as expected. How quaint
+    # a visually ccl rotation. However we will take a transpose later anyways so the rotation matrix definition is ccl, as expected. How quaint
+    # In data coordinates, however, the rotation is clockwise. The unit test keeps this in mind.
     angle = np.deg2rad(angle)
-    # print( angle )
     line = np.zeros((2, bound))
     line[0] = np.arange(bound)
 
@@ -23,9 +23,6 @@ def line_coords(angle, bound, center=(0, 0)):
 
     if len(rotation.shape) > 2:
         line = line.reshape((1, 2, bound))
-
-    # print( line.shape )
-    # print( rotation.T.shape )
 
     return np.int32(rotation.T @ line) + np.int32(np.reshape(center, (2, 1)))
 
@@ -69,7 +66,7 @@ def find_spikes(image, step, bound=1024, center=(0, 0), borders=(0.0, 1.0), thre
     spike_groups = np.split(spike_angles, borders + 1)
     spike_group_indices = np.split(spike_indices, borders + 1)
 
-    print(f"Cutoff of {cutoff:.3f}")
+    # print(f"Cutoff of {cutoff:.3f}")
     # unfortunately this for loop is necessary unless theres a convenient package for jagged arrays
     spike_list = np.zeros(len(spike_groups))
     for i in np.arange(len(spike_groups)):
@@ -136,13 +133,13 @@ def downsample_2d_image(image, pixel_size=8):  # ONLY WORKS ON 2D IMAGES
     return downsampled_image
 
 
-def poisson_resample_image(img, flux_factor):
+def poisson_resample_image(img, flux_factor, seed):
     """
     Resamples an image using a per-pixel poisson distribution.
     """
     # resamples an image where each pixel gets its own poisson distribution
     # this will change the scales around so that the resulting image has large positive values!!!! be aware
-    rng = np.random.default_rng()
+    rng = np.random.default_rng(seed)
     poisson_means = img * flux_factor
 
     resampled_img = rng.poisson(poisson_means, size=poisson_means.shape)
