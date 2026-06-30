@@ -113,4 +113,4 @@ def test_interpolate_image():
     return
 
 
-test_find_spikes()
+test_downsample_2d_image()
