@@ -3,7 +3,7 @@ import scipy.interpolate as sp_itp
 
 
 # def line_coords(angle, bound, center=np.array((0, 0))):
-def line_coords(angle, bound, center=(0, 0)):
+def line_coords(angle: np.float64, bound: np.int_, center: np.ndarray = (0, 0)):
     """
     Gets a pixelated line at a specified origin, angle, and length.
 
