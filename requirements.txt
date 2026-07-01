@@ -1,2 +1,3 @@
 numpy
 scipy>=1.18.0
+PSFSim @ git+https://github.com/Roman-HLIS-Cosmology-PIT/PSFSim@main
