@@ -160,7 +160,7 @@ def find_spikes(
         return spike_list
 
 
-def draw_ray(ax, angle: np.float64_, bound: np.int_, center=(0, 0), borders=(0.0, 1.0), **kwargs):
+def draw_ray(ax, angle: np.float64, bound: np.int_, center=(0, 0), borders=(0.0, 1.0), **kwargs):
     """
     Draws a line segment on an image at a specified origin, and length.
 
