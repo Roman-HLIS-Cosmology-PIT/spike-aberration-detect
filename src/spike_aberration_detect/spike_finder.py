@@ -42,7 +42,15 @@ def line_coords(angle: np.float64, bound: np.int_, center: np.ndarray = (0, 0)):
     return np.int32(rotation.T @ line) + np.int32(np.reshape(center, (2, 1)))
 
 
-def find_spikes(image, step, bound=1024, center=(0, 0), borders=(0.0, 1.0), threshold=0.5, verbose=False):
+def find_spikes(
+    image: np.ndarray,
+    step: np.int_,
+    bound: np.int_ = 1024,
+    center=(0, 0),
+    borders=(0.0, 1.0),
+    threshold: np.float64 = 0.5,
+    verbose: bool = False,
+):
     """
     Given an image of a PSF, find the diffraction spikes within.
 
@@ -152,7 +160,7 @@ def find_spikes(image, step, bound=1024, center=(0, 0), borders=(0.0, 1.0), thre
         return spike_list
 
 
-def draw_ray(ax, angle, bound, center=(0, 0), borders=(0.0, 1.0), **kwargs):
+def draw_ray(ax, angle: np.float64, bound: np.int_, center=(0, 0), borders=(0.0, 1.0), **kwargs):
     """
     Draws a line segment on an image at a specified origin, and length.
 
@@ -181,7 +189,7 @@ def draw_ray(ax, angle, bound, center=(0, 0), borders=(0.0, 1.0), **kwargs):
     return
 
 
-def downsample_2d_image(image, pixel_size=8):  # ONLY WORKS ON 2D IMAGES
+def downsample_2d_image(image: np.ndarray, pixel_size: np.int_ = 8):  # ONLY WORKS ON 2D IMAGES
     """
     Downsaples a 2D image by taking the mean of subpixels of a specified size.
 
@@ -225,7 +233,7 @@ def downsample_2d_image(image, pixel_size=8):  # ONLY WORKS ON 2D IMAGES
     return downsampled_image
 
 
-def poisson_resample_image(img, flux_factor, seed):
+def poisson_resample_image(img: np.ndarray, flux_factor: np.float64, seed: np.int_):
     """
     Resamples an image using a per-pixel poisson distribution.
 
@@ -254,7 +262,7 @@ def poisson_resample_image(img, flux_factor, seed):
     return resampled_img
 
 
-def interpolate_image(img, dense_size):  # 2D ONLY
+def interpolate_image(img: np.ndarray, dense_size: np.int_):  # 2D ONLY
     """
     Linearly interpolates a 2D image and returns another, denser image.
 
