@@ -271,33 +271,35 @@ def disc_coords(radius, center=(0, 0)):  # returns xy coords
     radii = stamp_x**2 + stamp_y**2
     circ_x, circ_y = np.where(radii < radius**2)
 
-    circ_x += center[0] - radius
-    circ_y += center[1] - radius
+    circ_x += center[0] - rad_int
+    circ_y += center[1] - rad_int
 
     return circ_x, circ_y
 
 
 def find_first_pair(arr_a, arr_b):
     """
-    Given two arrays, find the value of the first pair of elements.
+    Given two arrays of integers, find the value of the first pair of elements.
 
     Parameters
     ----------
-    arr_a : 1D array
+    arr_a : 1D array of int
         The first array.
-    arr_b : 1D array
+    arr_b : 1D array of int
         The second array.
 
     Returns
     -------
-    first_pair_val : type(arr_a[0])
+    first_pair_val : int
         The element of the first pair within the arrays.
     """
-    sz = np.min((arr_a.size, arr_b.size))
-    idx = np.arange(sz)
+    idx = np.arange(arr_b.size)
+
+    max_val = np.max(np.concat((arr_a, arr_b)))
+    notfound_val = np.iinfo(np.int_).max - max_val
 
     candidate_idx_dict = {arr_b[i]: idx[i] for i in idx}
-    pair_sum_list = np.array([candidate_idx_dict.get(i, np.iinfo(np.int_).max) for i in arr_a]) + idx
+    pair_sum_list = np.array([candidate_idx_dict.get(i, notfound_val) for i in arr_a]) + idx
 
     first_pair_val = arr_a[np.argmin(pair_sum_list)]
     return first_pair_val
