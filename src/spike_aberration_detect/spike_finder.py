@@ -137,7 +137,7 @@ def find_spikes(
         idx_max_l = spike_group_indices[i][-1]
 
         idx_min_l = idx_min_r - 1
-        idx_max_r = idx_max_l + 1
+        idx_max_r = (idx_max_l + 1) % sums.size
 
         slope_left = (sums[idx_min_r] - sums[idx_min_l]) / step
         slope_right = (sums[idx_max_r] - sums[idx_max_l]) / step
