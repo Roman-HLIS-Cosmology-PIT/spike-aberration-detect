@@ -1,5 +1,6 @@
 import numpy as np
 import scipy.interpolate as sp_itp
+import scipy.optimize as sp_opt
 from psfsim.polychrom import PolychromaticPSF
 
 import spike_aberration_detect.spike_finder as spikes
@@ -344,3 +345,225 @@ def find_object_in_catalog(
     else:
         assert target_catalog is not None
         return target_catalog[object_index]
+
+
+def get_image_mask_indices(
+    image: np.ndarray, hole_val, cut_center=True, center_radius=8
+):  # 2D ONLY, image assumed to be ij indexing
+    """
+    Gets the antimask for an image, option to mask center available.
+    """
+    image_analyze = np.copy(image)
+    center = np.array((image.shape[1] // 2, image.shape[0] // 2))
+
+    if cut_center:
+        disc_j, disc_i = disc_coords(center_radius, center)
+        image_analyze[disc_i, disc_j] = hole_val
+
+    mask_i, mask_j = np.where(image_analyze == hole_val)
+    antimask_i, antimask_j = np.where(image_analyze != hole_val)
+
+    return mask_i, mask_j, antimask_i, antimask_j
+
+
+def chisq_scipy_minimize_lin(
+    x,
+    sim_image_raw,
+    scanum,
+    wl_band,
+    wl_band_name,
+    ps_size,
+    seed,
+    antimask_i,
+    antimask_j,
+    background,
+    scale_factor,
+):
+    """
+    scipy-compatible chi-square calculator for image fitting.
+    """
+    # call psfsim and compare
+    flux = x[0] * scale_factor
+    extra_aberrations = x[1:]
+    guess_psf = (
+        generate_model_psf(
+            scanum,
+            0,
+            0,
+            flux,
+            ps_size,
+            ps_size,
+            wl_band,
+            wl_band_name,
+            seed,
+            extra_aberrations=extra_aberrations,
+            postprocess=False,
+        )
+        + background
+    )
+    means = guess_psf[antimask_i, antimask_j]
+    simdata = sim_image_raw[antimask_i, antimask_j]
+    px_count = antimask_i.size
+
+    chisq = poisson_chisq(simdata, means) / px_count
+    return chisq
+
+
+def fit_aberrations(
+    target_image,
+    response_matrix,
+    hole_val,
+    scanum,
+    wl_band,
+    wl_band_name,
+    seed,
+    background,
+    step,
+    bound,
+    center,
+    dense_ps_size,
+    dense_bound,
+    dense_center,
+    borders,
+    log_filename,
+    data_filename,
+    predict_flux=None,
+):
+    """
+    Attempts to find the aberrations in a PSF image.
+    """
+    # assume target image is in ij and linear scale
+    # no interpolation for now there are too many parameters
+    # patch holes
+    # measure spikes
+    # predict aberrations/flux and make a guess PSF
+    # run the minimizer
+    ps_size = target_image.shape[0]
+
+    target_image_fixed = spikes.interpolate_image(
+        patch_image_holes(np.arcsinh(target_image), hole_val), dense_ps_size
+    )
+    target_spikes = spikes.find_spikes(target_image_fixed, step, dense_bound, dense_center, borders=borders)
+
+    print(target_spikes)
+
+    big_flux = 1e14
+    psf_ideal = generate_model_psf(
+        scanum, 0, 0, big_flux, ps_size, ps_size, wl_band, wl_band_name, seed, postprocess=False
+    )
+    psf_ideal_interp = spikes.interpolate_image(np.arcsinh(psf_ideal), dense_ps_size)
+    ideal_spikes = spikes.find_spikes(psf_ideal_interp, step, dense_bound, dense_center, borders)
+
+    print(ideal_spikes)
+
+    dth_vec = target_spikes - ideal_spikes
+    predict_aberrations = np.linalg.inv(response_matrix.T @ response_matrix) @ response_matrix.T @ dth_vec
+
+    print(predict_aberrations)
+
+    def minimize_callback(intermediate_result: sp_opt.OptimizeResult):
+        with open(log_filename, "a") as fle:
+            print(intermediate_result, file=fle)
+        return
+
+    if predict_flux is None:
+        predict_flux = 5e8
+
+    disc_radius = np.int_(np.floor(borders[0] * bound))
+    _, _, antimask_i, antimask_j = get_image_mask_indices(target_image, hole_val, center_radius=disc_radius)
+
+    guess_psf = (
+        generate_model_psf(
+            scanum,
+            0,
+            0,
+            predict_flux,
+            ps_size,
+            ps_size,
+            wl_band,
+            wl_band_name,
+            seed,
+            extra_aberrations=predict_aberrations,
+            postprocess=False,
+        )
+        + background
+    )
+    guess_psf_interp = spikes.interpolate_image(np.arcsinh(guess_psf), dense_ps_size)
+    guess_spikes = spikes.find_spikes(guess_psf_interp, step, dense_bound, dense_center, borders)
+
+    good_px_count = antimask_i.size
+    init_chisq = (
+        poisson_chisq(target_image[antimask_i, antimask_j], guess_psf[antimask_i, antimask_j]) / good_px_count
+    )
+
+    with open(log_filename, "w") as fle:
+        print(f"hello optimizer\ninitial chisq: {init_chisq:.2f}", file=fle)
+        print(f"Inital aberrations: {predict_aberrations}", file=fle)
+
+    step_sizes = np.array((0.01, 0.01, 0.01, 0.01, 0.01, 0.01))
+    scale_factor = predict_flux
+    x0 = np.array((predict_flux / scale_factor, *predict_aberrations))
+
+    res = sp_opt.minimize(
+        chisq_scipy_minimize_lin,
+        x0,
+        (
+            target_image,
+            scanum,
+            wl_band,
+            wl_band_name,
+            ps_size,
+            seed,
+            antimask_i,
+            antimask_j,
+            background,
+            scale_factor,
+        ),
+        jac="3-point",
+        options={"finite_diff_rel_step": step_sizes},
+        tol=1e-2,
+        callback=minimize_callback,
+    )
+
+    opt_psf = (
+        generate_model_psf(
+            scanum,
+            0,
+            0,
+            np.exp(res.x[0]),
+            ps_size,
+            ps_size,
+            wl_band,
+            wl_band_name,
+            seed,
+            extra_aberrations=res.x[1:],
+            postprocess=False,
+        )
+        + background
+    )
+    opt_psf_interp = spikes.interpolate_image(opt_psf, dense_ps_size)
+    opt_spikes = spikes.find_spikes(opt_psf_interp, step, dense_bound, dense_center, borders=borders)
+
+    # I will change this to yaml later, there is much more information needed to completely specify everything
+    with open(log_filename, "a") as fle:
+        print(res, file=fle)
+        with np.printoptions(precision=4):
+            print(f"simdata spikes: {guess_spikes}", file=fle)
+            print(f"fit spikes: {opt_spikes}", file=fle)
+            print(f"guess spikes: {guess_spikes}", file=fle)
+            print(
+                f"ps_size: {ps_size}\n"
+                f"dense_ps_size: {dense_ps_size}\n"
+                f"step: {step}\n"
+                f"bound: {bound}\n"
+                f"center: {center}\n"
+                f"dense bound: {dense_bound}\n"
+                f"dense center: {dense_center}\n"
+                f"borders: {borders}\n"
+                f"threshold: 0.5\n"
+                f"center radius {disc_radius}\n"
+                f"file: {data_filename}",
+                file=fle,
+            )
+
+    return res
