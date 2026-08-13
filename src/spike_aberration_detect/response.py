@@ -207,7 +207,7 @@ def patch_image_holes(image, hole_val):
     return image_noholes
 
 
-def poisson_chisq(data, means):
+def poisson_chisq(data, means, means_flux=1, means_background=0):
     """
     Calculates the chi-square value between expected and observed data when the observed data follows a
     poisson distribution.
@@ -218,6 +218,10 @@ def poisson_chisq(data, means):
         The observed data.
     means : Array of int or float
         The expected data. The two arrays must be at least broadcastable.
+    means_flux : float
+        A value by which the means will be multiplied. Defaults to 1.
+    means_background : float
+        A value to which the means will be added after multiplication by means_flux. Defaults to 0.
 
     Returns
     -------
@@ -225,7 +229,8 @@ def poisson_chisq(data, means):
         The chi square value calculated using a poisson likelihood function:
         chisq = sum_i(f(d_i, t_i)) and f(d_i, t_i) = 2 * (t_i - d_i - (d_i * ln(t_i)) + (d_i*ln(d_i))
     """
-    f_arr = 2 * (means - data - data * np.log(means) + data * np.log(data))
+    true_means = (means * means_flux) + means_background
+    f_arr = 2 * (true_means - data - data * np.log(true_means) + data * np.log(data))
     return np.sum(f_arr)
 
 
@@ -409,6 +414,63 @@ def chisq_scipy_minimize_lin(
     return chisq
 
 
+def chisq_scipy_minimize_flux_bg(
+    x,
+    sim_image_raw: np.ndarray,
+    means_raw: np.ndarray,
+    antimask_i: np.ndarray,
+    antimask_j: np.ndarray,
+    scale_factor: np.float64,
+):
+    """
+    scipy-compatible chi-square calculator that only uses the flux and a background value. This function does not
+    call psfsim.
+    """
+    flux = x[0] * scale_factor
+    means = means_raw[antimask_i, antimask_j]
+    simdata = sim_image_raw[antimask_i, antimask_j]
+
+    px_count = antimask_i.size
+    chisq = poisson_chisq(simdata, means, means_flux=flux, means_background=x[1]) / px_count
+    return chisq
+
+
+def guess_aberrations(
+    target_image: np.ndarray,
+    response_matrix,
+    hole_val,
+    scanum,
+    wl_band,
+    wl_band_name,
+    seed,
+    step,
+    dense_ps_size,
+    dense_bound,
+    dense_center,
+    borders,
+):
+    """
+    Guesses the aberrations in a PSF given the image and a response matrix.
+    """
+    ps_size = target_image.shape[0]
+
+    target_image_fixed = spikes.interpolate_image(
+        patch_image_holes(np.arcsinh(target_image), hole_val), dense_ps_size
+    )
+    target_spikes = spikes.find_spikes(target_image_fixed, step, dense_bound, dense_center, borders=borders)
+
+    big_flux = 1e14
+    psf_ideal = generate_model_psf(
+        scanum, 0, 0, big_flux, ps_size, ps_size, wl_band, wl_band_name, seed, postprocess=False
+    )
+    psf_ideal_interp = spikes.interpolate_image(np.arcsinh(psf_ideal), dense_ps_size)
+    ideal_spikes = spikes.find_spikes(psf_ideal_interp, step, dense_bound, dense_center, borders)
+
+    dth_vec = target_spikes - ideal_spikes
+    predict_aberrations = np.linalg.inv(response_matrix.T @ response_matrix) @ response_matrix.T @ dth_vec
+    return predict_aberrations
+
+
 def fit_aberrations(
     target_image,
     response_matrix,
@@ -427,7 +489,7 @@ def fit_aberrations(
     borders,
     log_filename,
     data_filename,
-    predict_flux=None,
+    predict_flux=5e8,
 ):
     """
     Attempts to find the aberrations in a PSF image.
@@ -439,35 +501,25 @@ def fit_aberrations(
     # predict aberrations/flux and make a guess PSF
     # run the minimizer
     ps_size = target_image.shape[0]
-
-    target_image_fixed = spikes.interpolate_image(
-        patch_image_holes(np.arcsinh(target_image), hole_val), dense_ps_size
+    predict_aberrations = guess_aberrations(
+        target_image,
+        response_matrix,
+        hole_val,
+        scanum,
+        wl_band,
+        wl_band_name,
+        seed,
+        step,
+        dense_ps_size,
+        dense_bound,
+        dense_center,
+        borders,
     )
-    target_spikes = spikes.find_spikes(target_image_fixed, step, dense_bound, dense_center, borders=borders)
-
-    print(target_spikes)
-
-    big_flux = 1e14
-    psf_ideal = generate_model_psf(
-        scanum, 0, 0, big_flux, ps_size, ps_size, wl_band, wl_band_name, seed, postprocess=False
-    )
-    psf_ideal_interp = spikes.interpolate_image(np.arcsinh(psf_ideal), dense_ps_size)
-    ideal_spikes = spikes.find_spikes(psf_ideal_interp, step, dense_bound, dense_center, borders)
-
-    print(ideal_spikes)
-
-    dth_vec = target_spikes - ideal_spikes
-    predict_aberrations = np.linalg.inv(response_matrix.T @ response_matrix) @ response_matrix.T @ dth_vec
-
-    print(predict_aberrations)
 
     def minimize_callback(intermediate_result: sp_opt.OptimizeResult):
         with open(log_filename, "a") as fle:
             print(intermediate_result, file=fle)
         return
-
-    if predict_flux is None:
-        predict_flux = 5e8
 
     disc_radius = np.int_(np.floor(borders[0] * bound))
     _, _, antimask_i, antimask_j = get_image_mask_indices(target_image, hole_val, center_radius=disc_radius)
@@ -565,5 +617,66 @@ def fit_aberrations(
                 f"file: {data_filename}",
                 file=fle,
             )
+
+    return res
+
+
+def fit_flux_bg(
+    target_image,
+    init_image,
+    hole_val,
+    log_filename,
+    bound,
+    borders=(0.0, 1.0),
+    predict_flux=5e8,
+    predict_background=50,
+):
+    """
+    Attempts to find the flux and background value of a PSF image.
+    """
+
+    def minimize_callback(intermediate_result: sp_opt.OptimizeResult):
+        with open(log_filename, "a") as fle:
+            print(intermediate_result, file=fle)
+        return
+
+    disc_radius = np.int_(np.floor(borders[0] * bound))
+    _, _, antimask_i, antimask_j = get_image_mask_indices(target_image, hole_val, center_radius=disc_radius)
+
+    px_count = antimask_i.size
+
+    step_sizes = np.array(
+        (
+            0.001,
+            0.01,
+        )
+    )
+    scale_factor = predict_flux
+    x0 = np.array((predict_flux / scale_factor, predict_background))
+
+    init_chisq = (
+        poisson_chisq(
+            target_image[antimask_i, antimask_j],
+            init_image[antimask_i, antimask_j],
+            predict_flux,
+            predict_background,
+        )
+        / px_count
+    )
+    with open(log_filename, "w") as fle:
+        print(f"hello optimizer\ninitial chisq: {init_chisq:.2f}", file=fle)
+
+    res = sp_opt.minimize(
+        chisq_scipy_minimize_flux_bg,
+        x0,
+        (target_image, init_image, antimask_i, antimask_j, scale_factor),
+        jac="3-point",
+        options={"finite_diff_rel_step": step_sizes},
+        tol=1e-2,
+        callback=minimize_callback,
+    )
+
+    with open(log_filename, "a") as fle:
+        print(res, file=fle)
 
     return res
