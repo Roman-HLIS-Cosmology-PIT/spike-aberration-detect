@@ -371,25 +371,16 @@ def get_image_mask_indices(
     return mask_i, mask_j, antimask_i, antimask_j
 
 
-def chisq_scipy_minimize_lin(
-    x,
-    sim_image_raw,
-    scanum,
-    wl_band,
-    wl_band_name,
-    ps_size,
-    seed,
-    antimask_i,
-    antimask_j,
-    background,
-    scale_factor,
+def chisq_scipy_minimize(
+    x, sim_image_raw, scanum, wl_band, wl_band_name, ps_size, seed, antimask_i, antimask_j, scale_factor
 ):
     """
     scipy-compatible chi-square calculator for image fitting.
     """
     # call psfsim and compare
     flux = x[0] * scale_factor
-    extra_aberrations = x[1:]
+    background = x[1]
+    extra_aberrations = x[2:]
     guess_psf = (
         generate_model_psf(
             scanum,
@@ -402,6 +393,37 @@ def chisq_scipy_minimize_lin(
             wl_band_name,
             seed,
             extra_aberrations=extra_aberrations,
+            postprocess=False,
+        )
+        + background
+    )
+    means = guess_psf[antimask_i, antimask_j]
+    simdata = sim_image_raw[antimask_i, antimask_j]
+    px_count = antimask_i.size
+
+    chisq = poisson_chisq(simdata, means) / px_count
+    return chisq
+
+
+def chisq_scipy_minimize_aberrations_only(
+    x, sim_image_raw, scanum, wl_band, wl_band_name, ps_size, seed, antimask_i, antimask_j, flux, background
+):
+    """
+    scipy-compatible chi-square calculator for image fitting without flux and background parameters.
+    """
+    # call psfsim and compare
+    guess_psf = (
+        generate_model_psf(
+            scanum,
+            0,
+            0,
+            flux,
+            ps_size,
+            ps_size,
+            wl_band,
+            wl_band_name,
+            seed,
+            extra_aberrations=x,
             postprocess=False,
         )
         + background
@@ -471,6 +493,11 @@ def guess_aberrations(
     return predict_aberrations
 
 
+"""
+Attempts to find the aberrations in a PSF image.
+"""
+
+
 def fit_aberrations(
     target_image,
     response_matrix,
@@ -479,7 +506,6 @@ def fit_aberrations(
     wl_band,
     wl_band_name,
     seed,
-    background,
     step,
     bound,
     center,
@@ -489,7 +515,9 @@ def fit_aberrations(
     borders,
     log_filename,
     data_filename,
+    aberrations_only=False,
     predict_flux=5e8,
+    predict_background=0,
 ):
     """
     Attempts to find the aberrations in a PSF image.
@@ -510,7 +538,6 @@ def fit_aberrations(
         wl_band_name,
         seed,
         step,
-        dense_ps_size,
         dense_bound,
         dense_center,
         borders,
@@ -524,6 +551,7 @@ def fit_aberrations(
     disc_radius = np.int_(np.floor(borders[0] * bound))
     _, _, antimask_i, antimask_j = get_image_mask_indices(target_image, hole_val, center_radius=disc_radius)
 
+    print(predict_flux)
     guess_psf = (
         generate_model_psf(
             scanum,
@@ -538,7 +566,7 @@ def fit_aberrations(
             extra_aberrations=predict_aberrations,
             postprocess=False,
         )
-        + background
+        + predict_background
     )
     guess_psf_interp = spikes.interpolate_image(np.arcsinh(guess_psf), dense_ps_size)
     guess_spikes = spikes.find_spikes(guess_psf_interp, step, dense_bound, dense_center, borders)
@@ -552,47 +580,97 @@ def fit_aberrations(
         print(f"hello optimizer\ninitial chisq: {init_chisq:.2f}", file=fle)
         print(f"Inital aberrations: {predict_aberrations}", file=fle)
 
-    step_sizes = np.array((0.01, 0.01, 0.01, 0.01, 0.01, 0.01))
-    scale_factor = predict_flux
-    x0 = np.array((predict_flux / scale_factor, *predict_aberrations))
+    res = None
+    opt_psf = None
+    scale_factor = 1
 
-    res = sp_opt.minimize(
-        chisq_scipy_minimize_lin,
-        x0,
-        (
-            target_image,
-            scanum,
-            wl_band,
-            wl_band_name,
-            ps_size,
-            seed,
-            antimask_i,
-            antimask_j,
-            background,
-            scale_factor,
-        ),
-        jac="3-point",
-        options={"finite_diff_rel_step": step_sizes},
-        tol=1e-2,
-        callback=minimize_callback,
-    )
+    if aberrations_only:
+        # step_sizes = np.array( ( 0.01, 0.01, 0.01, 0.01, 0.01 ) )
+        step_sizes = np.full(5, 0.01)
+        x0 = np.array((*predict_aberrations,))
 
-    opt_psf = (
-        generate_model_psf(
-            scanum,
-            0,
-            0,
-            np.exp(res.x[0]),
-            ps_size,
-            ps_size,
-            wl_band,
-            wl_band_name,
-            seed,
-            extra_aberrations=res.x[1:],
-            postprocess=False,
+        res = sp_opt.minimize(
+            chisq_scipy_minimize_aberrations_only,
+            x0,
+            (
+                target_image,
+                scanum,
+                wl_band,
+                wl_band_name,
+                ps_size,
+                seed,
+                antimask_i,
+                antimask_j,
+                predict_flux,
+                predict_background,
+            ),
+            jac="3-point",
+            options={"finite_diff_rel_step": step_sizes},
+            tol=1e-2,
+            callback=minimize_callback,
         )
-        + background
-    )
+        opt_psf = (
+            generate_model_psf(
+                scanum,
+                0,
+                0,
+                predict_flux,
+                ps_size,
+                ps_size,
+                wl_band,
+                wl_band_name,
+                seed,
+                extra_aberrations=res.x,
+                postprocess=False,
+            )
+            + predict_background
+        )
+
+    else:
+        # step_sizes = np.array( ( 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01 ) )
+        step_sizes = np.full(7, 0.01)
+        scale_factor = predict_flux
+        x0 = np.array((predict_flux / scale_factor, predict_background, *predict_aberrations))
+
+        res = sp_opt.minimize(
+            chisq_scipy_minimize,
+            x0,
+            (
+                target_image,
+                scanum,
+                wl_band,
+                wl_band_name,
+                ps_size,
+                seed,
+                antimask_i,
+                antimask_j,
+                scale_factor,
+            ),
+            jac="3-point",
+            options={"finite_diff_rel_step": step_sizes},
+            tol=1e-2,
+            callback=minimize_callback,
+        )
+        res.x[0] *= scale_factor
+
+        opt_psf = (
+            generate_model_psf(
+                scanum,
+                0,
+                0,
+                res.x[0],
+                ps_size,
+                ps_size,
+                wl_band,
+                wl_band_name,
+                seed,
+                extra_aberrations=res.x[2:],
+                postprocess=False,
+            )
+            + res.x[1]
+        )
+
+    # opt_psf = response.generate_model_psf( WFI, 0, 0, np.exp( res.x[0] ), ps_size, ps_size, wl_band, wl_band_name, seed, extra_aberrations=res.x[1:], postprocess=False ) + background
     opt_psf_interp = spikes.interpolate_image(opt_psf, dense_ps_size)
     opt_spikes = spikes.find_spikes(opt_psf_interp, step, dense_bound, dense_center, borders=borders)
 
@@ -612,7 +690,9 @@ def fit_aberrations(
                 f"dense bound: {dense_bound}\n"
                 f"dense center: {dense_center}\n"
                 f"borders: {borders}\n"
+                f"scale factor: {scale_factor}"
                 f"threshold: 0.5\n"
+                f"WFI {scanum}\n"
                 f"center radius {disc_radius}\n"
                 f"file: {data_filename}",
                 file=fle,
