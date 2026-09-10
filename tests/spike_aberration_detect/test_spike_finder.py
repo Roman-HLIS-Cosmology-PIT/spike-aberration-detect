@@ -87,14 +87,24 @@ def test_downsample_2d_image():
     """
     Testing the image downsampler.
     """
-    left, right = np.meshgrid(np.arange(8), np.arange(8))
+    left, right = np.meshgrid(np.arange(16), np.arange(16))
     image = left + right
 
-    dsamp_img = downsample_2d_image(image, 2)
-    dsamp_l, dsamp_r = np.meshgrid(np.arange(1, 8, 2), np.arange(1, 8, 2))
-    dsamp_img_answer = dsamp_l + dsamp_r - 1
+    dsamp_img = downsample_2d_image(image, 4)
+
+    dsamp_l, dsamp_r = np.meshgrid(np.arange(1, 16, 4), np.arange(1, 16, 4))
+    dsamp_img_answer = dsamp_l + dsamp_r + 1
+
+    left_odd, right_odd = np.meshgrid(np.arange(9), np.arange(9))
+    image_odd = left_odd + right_odd
+
+    dsamp_img_odd = downsample_2d_image(image_odd, 3)
+
+    dsamp_l_odd, dsamp_r_odd = np.meshgrid(np.arange(1, 9, 3), np.arange(1, 9, 3))
+    dsamp_img_answer_odd = dsamp_l_odd + dsamp_r_odd
 
     assert np.allclose(dsamp_img, dsamp_img_answer)
+    assert np.allclose(dsamp_img_odd, dsamp_img_answer_odd)
     return
 
 

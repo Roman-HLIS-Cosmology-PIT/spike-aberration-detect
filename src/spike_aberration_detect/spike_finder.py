@@ -109,6 +109,14 @@ def find_spikes(
     range_high = np.int_(borders[1] * bound)
 
     sums = np.sum(line_vals[:, range_low:range_high], axis=-1)
+
+    # Break glass in case of emergency
+    # m_min = 6
+    # sums_ft = np.fft.fft( sums )
+    # sums_ft[ :m_min ] = 0
+    # sums_ft[ -m_min + 1: ] = 0
+    # sums = np.fft.ifft( sums_ft ).real
+
     """
     This formula is slightly different from the midpoint formula from before. The formula defaults to 50%, using 50% recovers the original behavior. Other
     ways to do this include rejecting the lowest 10% of values or so. That one might be worth pursuing in the future. The goal is to keep this method as simple as possible--
@@ -219,17 +227,82 @@ def downsample_2d_image(image: np.ndarray, pixel_size: np.int_ = 8):  # ONLY WOR
     pixels_side = np.arange(dsamp_size) * pixel_size
     pixels_cols, pixels_rows = np.meshgrid(pixels_side, pixels_side)
 
-    pixels_rows = pixels_rows[:, :, np.newaxis]  # promote to 3D
-    pixels_cols = pixels_cols[:, :, np.newaxis]
+    pixels_rows = pixels_rows[:, :, np.newaxis, np.newaxis]  # promote to 4D
+    pixels_cols = pixels_cols[:, :, np.newaxis, np.newaxis]
 
-    idx_arr_subpixel_rows = np.full((dsamp_size, dsamp_size, pixel_size**2), subpixel_rows.flatten())
-    idx_arr_subpixel_cols = np.full((dsamp_size, dsamp_size, pixel_size**2), subpixel_cols.flatten())
+    idx_arr_subpixel_rows = np.full((dsamp_size, dsamp_size, pixel_size, pixel_size), subpixel_rows)
+    idx_arr_subpixel_cols = np.full((dsamp_size, dsamp_size, pixel_size, pixel_size), subpixel_cols)
 
     idx_arr_rows = idx_arr_subpixel_rows + pixels_rows
     idx_arr_cols = idx_arr_subpixel_cols + pixels_cols
 
     pixelated_image = image[idx_arr_rows, idx_arr_cols]
-    downsampled_image = np.mean(pixelated_image, axis=-1)
+
+    downsampled_image = None
+    dsamp_side = np.arange(dsamp_size)
+    dsamp_pixel_cols, dsamp_pixel_rows = np.meshgrid(dsamp_side, dsamp_side)
+
+    if pixel_size % 2 == 1:
+        # odd number solution
+        center_index = (pixel_size - 1) // 2
+        center_subpixel_rows = np.full((dsamp_size, dsamp_size), center_index)
+        center_subpixel_cols = np.full((dsamp_size, dsamp_size), center_index)
+
+        downsampled_image = pixelated_image[
+            dsamp_pixel_rows, dsamp_pixel_cols, center_subpixel_rows, center_subpixel_cols
+        ]
+    else:
+        # even number solution
+        # Maybe I should just use scipy's grid interpolator instead...
+        expansion_matrix = (1.0 / 256) * np.array(
+            (
+                (
+                    1,
+                    -9,
+                    -9,
+                    1,
+                ),
+                (
+                    -9,
+                    81,
+                    81,
+                    -9,
+                ),
+                (
+                    -9,
+                    81,
+                    81,
+                    -9,
+                ),
+                (1, -9, -9, 1),
+            )
+        )
+        expansion_matrix = expansion_matrix[np.newaxis, np.newaxis, :, :]  # promote to 4D
+        if pixel_size == 2:
+            raise ValueError("2x2 subpixels are not supported! Try a different number.")
+        center_4x4_low_idx = (pixel_size // 2) - 2
+        center_4x4_side = np.arange(center_4x4_low_idx, center_4x4_low_idx + 4)
+        center_4x4_cols, center_4x4_rows = np.meshgrid(center_4x4_side, center_4x4_side)
+
+        center_4d_rows = np.full(
+            (dsamp_size, dsamp_size, 4, 4), dsamp_pixel_rows[:, :, np.newaxis, np.newaxis]
+        )
+        center_4d_cols = np.full(
+            (dsamp_size, dsamp_size, 4, 4), dsamp_pixel_cols[:, :, np.newaxis, np.newaxis]
+        )
+        center_4d_subpixel_rows = np.full(
+            (dsamp_size, dsamp_size, 4, 4), center_4x4_rows[np.newaxis, np.newaxis, :, :]
+        )
+        center_4d_subpixel_cols = np.full(
+            (dsamp_size, dsamp_size, 4, 4), center_4x4_cols[np.newaxis, np.newaxis, :, :]
+        )
+
+        centers = pixelated_image[
+            center_4d_rows, center_4d_cols, center_4d_subpixel_rows, center_4d_subpixel_cols
+        ]
+        downsampled_image = np.sum(centers * expansion_matrix, axis=(-1, -2))
+
+    # downsampled_image = np.mean(pixelated_image, axis=-1)
     return downsampled_image
 
 

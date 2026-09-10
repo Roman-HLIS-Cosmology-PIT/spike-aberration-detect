@@ -158,8 +158,9 @@ def generate_model_psf(
 
     pixel_size = ovsamp
     obj.compute_poly_psf(
-        optical_psf_only=True,
+        # optical_psf_only=True,
         use_postage_stamp_size=ps_size,
+        postage_stamp_size=ps_size,
         ovsamp=ovsamp,
         use_filter=wl_band_name,
         extra_aberrations=extra_aberrations,
