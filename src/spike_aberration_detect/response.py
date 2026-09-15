@@ -1,5 +1,7 @@
+import astropy as asp
 import numpy as np
 import scipy.interpolate as sp_itp
+import scipy.optimize as sp_opt
 from psfsim.polychrom import PolychromaticPSF
 
 import spike_aberration_detect.spike_finder as spikes
@@ -20,6 +22,7 @@ def build_response_matrix(
     step: np.float64,
     bound: np.int_,
     center,
+    ovsamp=8,
     **kwargs,
 ):
     """
@@ -58,6 +61,8 @@ def build_response_matrix(
         The length of lines to be drawn.
     center : tuple or array of int, optional
         The point at which each line begins.
+    ovsamp : int, optional
+        Oversampling factor for psfsim.
     **kwargs : other
         Extra arguments to be passed to spike_aberration_detect.spike_finder.find_spikes.
         Includes borders and threshold. This function will not work if verbose=True is
@@ -85,6 +90,7 @@ def build_response_matrix(
             wl_band_name,
             seed,
             extra_aberrations=extra_aberrations,
+            ovsamp=ovsamp,
         )
 
         psf = np.arcsinh(psf_lin)
@@ -157,11 +163,13 @@ def generate_model_psf(
 
     pixel_size = ovsamp
     obj.compute_poly_psf(
-        optical_psf_only=True,
+        # optical_psf_only=True,
         use_postage_stamp_size=ps_size,
+        postage_stamp_size=ps_size,
         ovsamp=ovsamp,
         use_filter=wl_band_name,
         extra_aberrations=extra_aberrations,
+        reflect=False,
     )
 
     psf = spikes.downsample_2d_image(np.abs(obj.chromatic_psf), pixel_size)
@@ -206,7 +214,7 @@ def patch_image_holes(image, hole_val):
     return image_noholes
 
 
-def poisson_chisq(data, means):
+def poisson_chisq(data, means, means_flux=1, means_background=0):
     """
     Calculates the chi-square value between expected and observed data when the observed data follows a
     poisson distribution.
@@ -217,6 +225,10 @@ def poisson_chisq(data, means):
         The observed data.
     means : Array of int or float
         The expected data. The two arrays must be at least broadcastable.
+    means_flux : float
+        A value by which the means will be multiplied. Defaults to 1.
+    means_background : float
+        A value to which the means will be added after multiplication by means_flux. Defaults to 0.
 
     Returns
     -------
@@ -224,7 +236,8 @@ def poisson_chisq(data, means):
         The chi square value calculated using a poisson likelihood function:
         chisq = sum_i(f(d_i, t_i)) and f(d_i, t_i) = 2 * (t_i - d_i - (d_i * ln(t_i)) + (d_i*ln(d_i))
     """
-    f_arr = 2 * (means - data - data * np.log(means) + data * np.log(data))
+    true_means = (means * means_flux) + means_background
+    f_arr = 2 * (true_means - data - data * np.log(true_means) + data * np.log(data))
     return np.sum(f_arr)
 
 
@@ -344,3 +357,575 @@ def find_object_in_catalog(
     else:
         assert target_catalog is not None
         return target_catalog[object_index]
+
+
+def get_image_mask_indices(
+    image: np.ndarray, hole_val, cut_center=True, center_radius=8
+):  # 2D ONLY, image assumed to be ij indexing
+    """
+    Gets the antimask for an image, option to mask center available.
+    """
+    image_analyze = np.copy(image)
+    center = np.array((image.shape[1] // 2, image.shape[0] // 2))
+
+    if cut_center:
+        disc_j, disc_i = disc_coords(center_radius, center)
+        image_analyze[disc_i, disc_j] = hole_val
+
+    mask_i, mask_j = np.where(image_analyze == hole_val)
+    antimask_i, antimask_j = np.where(image_analyze != hole_val)
+
+    return mask_i, mask_j, antimask_i, antimask_j
+
+
+def chisq_scipy_minimize(
+    x,
+    sim_image_raw,
+    scanum,
+    wl_band,
+    wl_band_name,
+    ps_size,
+    seed,
+    antimask_i,
+    antimask_j,
+    scale_factor,
+    ovsamp=8,
+):
+    """
+    scipy-compatible chi-square calculator for image fitting.
+    """
+    # call psfsim and compare
+    flux = x[0] * scale_factor
+    background = x[1]
+    extra_aberrations = x[2:]
+    guess_psf = (
+        generate_model_psf(
+            scanum,
+            0,
+            0,
+            flux,
+            ps_size,
+            ps_size,
+            wl_band,
+            wl_band_name,
+            seed,
+            extra_aberrations=extra_aberrations,
+            postprocess=False,
+            ovsamp=ovsamp,
+        )
+        + background
+    )
+    means = guess_psf[antimask_i, antimask_j]
+    simdata = sim_image_raw[antimask_i, antimask_j]
+    px_count = antimask_i.size
+
+    chisq = poisson_chisq(simdata, means) / px_count
+    return chisq
+
+
+def chisq_scipy_minimize_aberrations_only(
+    x,
+    sim_image_raw,
+    scanum,
+    wl_band,
+    wl_band_name,
+    ps_size,
+    seed,
+    antimask_i,
+    antimask_j,
+    flux,
+    background,
+    ovsamp=8,
+):
+    """
+    scipy-compatible chi-square calculator for image fitting without flux and background parameters.
+    """
+    # call psfsim and compare
+    guess_psf = (
+        generate_model_psf(
+            scanum,
+            0,
+            0,
+            flux,
+            ps_size,
+            ps_size,
+            wl_band,
+            wl_band_name,
+            seed,
+            extra_aberrations=x,
+            postprocess=False,
+            ovsamp=ovsamp,
+        )
+        + background
+    )
+    means = guess_psf[antimask_i, antimask_j]
+    simdata = sim_image_raw[antimask_i, antimask_j]
+    px_count = antimask_i.size
+
+    chisq = poisson_chisq(simdata, means) / px_count
+    return chisq
+
+
+def chisq_scipy_minimize_flux_bg(
+    x,
+    sim_image_raw: np.ndarray,
+    means_raw: np.ndarray,
+    antimask_i: np.ndarray,
+    antimask_j: np.ndarray,
+    scale_factor: np.float64,
+):
+    """
+    scipy-compatible chi-square calculator that only uses the flux and a background value. This function does not
+    call psfsim.
+    """
+    flux = x[0] * scale_factor
+    means = means_raw[antimask_i, antimask_j]
+    simdata = sim_image_raw[antimask_i, antimask_j]
+
+    px_count = antimask_i.size
+    chisq = poisson_chisq(simdata, means, means_flux=flux, means_background=x[1]) / px_count
+    return chisq
+
+
+def guess_aberrations(
+    target_image: np.ndarray,
+    response_matrix,
+    hole_val,
+    scanum,
+    wl_band,
+    wl_band_name,
+    seed,
+    step,
+    dense_ps_size,
+    dense_bound,
+    dense_center,
+    borders,
+    ovsamp=8,
+):
+    """
+    Guesses the aberrations in a PSF given the image and a response matrix.
+    """
+    ps_size = target_image.shape[0]
+
+    target_image_fixed = spikes.interpolate_image(
+        patch_image_holes(np.arcsinh(target_image), hole_val), dense_ps_size
+    )
+    target_spikes = spikes.find_spikes(target_image_fixed, step, dense_bound, dense_center, borders=borders)
+
+    big_flux = 1e14
+    psf_ideal = generate_model_psf(
+        scanum,
+        0,
+        0,
+        big_flux,
+        ps_size,
+        ps_size,
+        wl_band,
+        wl_band_name,
+        seed,
+        postprocess=False,
+        ovsamp=ovsamp,
+    )
+    psf_ideal_interp = spikes.interpolate_image(np.arcsinh(psf_ideal), dense_ps_size)
+    ideal_spikes = spikes.find_spikes(psf_ideal_interp, step, dense_bound, dense_center, borders)
+
+    dth_vec = target_spikes - ideal_spikes
+    predict_aberrations = np.linalg.inv(response_matrix.T @ response_matrix) @ response_matrix.T @ dth_vec
+    return predict_aberrations
+
+
+"""
+Attempts to find the aberrations in a PSF image.
+"""
+
+
+def fit_aberrations(
+    target_image,
+    response_matrix,
+    hole_val,
+    scanum,
+    wl_band,
+    wl_band_name,
+    seed,
+    step,
+    bound,
+    center,
+    dense_ps_size,
+    dense_bound,
+    dense_center,
+    borders,
+    log_filename,
+    data_filename,
+    aberrations_only=False,
+    predict_flux=5e8,
+    predict_background=0,
+    ovsamp=8,
+):
+    """
+    Attempts to find the aberrations in a PSF image.
+    """
+    # assume target image is in ij and linear scale
+    # no interpolation for now there are too many parameters
+    # patch holes
+    # measure spikes
+    # predict aberrations/flux and make a guess PSF
+    # run the minimizer
+    ps_size = target_image.shape[0]
+    predict_aberrations = guess_aberrations(
+        target_image,
+        response_matrix,
+        hole_val,
+        scanum,
+        wl_band,
+        wl_band_name,
+        seed,
+        step,
+        dense_ps_size,
+        dense_bound,
+        dense_center,
+        borders,
+        ovsamp=ovsamp,
+    )
+
+    def minimize_callback(intermediate_result: sp_opt.OptimizeResult):
+        with open(log_filename, "a") as fle:
+            print(intermediate_result, file=fle)
+        return
+
+    disc_radius = np.int_(np.floor(borders[0] * bound))
+    _, _, antimask_i, antimask_j = get_image_mask_indices(target_image, hole_val, center_radius=disc_radius)
+
+    print(predict_flux)
+    guess_psf = (
+        generate_model_psf(
+            scanum,
+            0,
+            0,
+            predict_flux,
+            ps_size,
+            ps_size,
+            wl_band,
+            wl_band_name,
+            seed,
+            extra_aberrations=predict_aberrations,
+            postprocess=False,
+            ovsamp=ovsamp,
+        )
+        + predict_background
+    )
+    guess_psf_interp = spikes.interpolate_image(np.arcsinh(guess_psf), dense_ps_size)
+    guess_spikes = spikes.find_spikes(guess_psf_interp, step, dense_bound, dense_center, borders)
+
+    good_px_count = antimask_i.size
+    init_chisq = (
+        poisson_chisq(target_image[antimask_i, antimask_j], guess_psf[antimask_i, antimask_j]) / good_px_count
+    )
+
+    with open(log_filename, "w") as fle:
+        print(f"hello optimizer\ninitial chisq: {init_chisq:.2f}", file=fle)
+        print(f"Inital aberrations: {predict_aberrations}", file=fle)
+
+    res = None
+    opt_psf = None
+    scale_factor = 1
+
+    if aberrations_only:
+        # step_sizes = np.array( ( 0.01, 0.01, 0.01, 0.01, 0.01 ) )
+        step_sizes = np.full(5, 0.01)
+        x0 = np.array((*predict_aberrations,))
+
+        res = sp_opt.minimize(
+            chisq_scipy_minimize_aberrations_only,
+            x0,
+            (
+                target_image,
+                scanum,
+                wl_band,
+                wl_band_name,
+                ps_size,
+                seed,
+                antimask_i,
+                antimask_j,
+                predict_flux,
+                predict_background,
+                ovsamp,
+            ),
+            jac="3-point",
+            options={"finite_diff_rel_step": step_sizes},
+            tol=1e-2,
+            callback=minimize_callback,
+        )
+        opt_psf = (
+            generate_model_psf(
+                scanum,
+                0,
+                0,
+                predict_flux,
+                ps_size,
+                ps_size,
+                wl_band,
+                wl_band_name,
+                seed,
+                extra_aberrations=res.x,
+                postprocess=False,
+                ovsamp=ovsamp,
+            )
+            + predict_background
+        )
+
+    else:
+        # step_sizes = np.array( ( 0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.01 ) )
+        step_sizes = np.full(7, 0.01)
+        scale_factor = predict_flux
+        x0 = np.array((predict_flux / scale_factor, predict_background, *predict_aberrations))
+
+        res = sp_opt.minimize(
+            chisq_scipy_minimize,
+            x0,
+            (
+                target_image,
+                scanum,
+                wl_band,
+                wl_band_name,
+                ps_size,
+                seed,
+                antimask_i,
+                antimask_j,
+                scale_factor,
+                ovsamp,
+            ),
+            jac="3-point",
+            options={"finite_diff_rel_step": step_sizes},
+            tol=1e-2,
+            callback=minimize_callback,
+        )
+        res.x[0] *= scale_factor
+
+        opt_psf = (
+            generate_model_psf(
+                scanum,
+                0,
+                0,
+                res.x[0],
+                ps_size,
+                ps_size,
+                wl_band,
+                wl_band_name,
+                seed,
+                extra_aberrations=res.x[2:],
+                postprocess=False,
+                ovsamp=ovsamp,
+            )
+            + res.x[1]
+        )
+
+    # opt_psf = response.generate_model_psf( WFI, 0, 0, np.exp( res.x[0] ), ps_size, ps_size, wl_band, wl_band_name, seed, extra_aberrations=res.x[1:], postprocess=False ) + background
+    opt_psf_interp = spikes.interpolate_image(opt_psf, dense_ps_size)
+    opt_spikes = spikes.find_spikes(opt_psf_interp, step, dense_bound, dense_center, borders=borders)
+
+    # I will change this to yaml later, there is much more information needed to completely specify everything
+    with open(log_filename, "a") as fle:
+        print(res, file=fle)
+        with np.printoptions(precision=4):
+            print(f"simdata spikes: {guess_spikes}", file=fle)
+            print(f"fit spikes: {opt_spikes}", file=fle)
+            print(f"guess spikes: {guess_spikes}", file=fle)
+            print(
+                f"ps_size: {ps_size}\n"
+                f"ovsamp: {ovsamp}\n"
+                f"dense_ps_size: {dense_ps_size}\n"
+                f"step: {step}\n"
+                f"bound: {bound}\n"
+                f"center: {center}\n"
+                f"dense bound: {dense_bound}\n"
+                f"dense center: {dense_center}\n"
+                f"borders: {borders}\n"
+                f"scale factor: {scale_factor}"
+                f"threshold: 0.5\n"
+                f"WFI {scanum}\n"
+                f"center radius {disc_radius}\n"
+                f"file: {data_filename}",
+                file=fle,
+            )
+
+    return res
+
+
+# predicted flux and background will be specified along with the initial image. This is enforced.
+def fit_flux_bg(
+    target_image, init_image, init_flux, init_background, hole_val, log_filename, bound, borders=(0.0, 1.0)
+):
+    """
+    Attempts to find the flux and background value of a PSF image.
+    """
+
+    def minimize_callback(intermediate_result: sp_opt.OptimizeResult):
+        with open(log_filename, "a") as fle:
+            print(intermediate_result, file=fle)
+        return
+
+    disc_radius = np.int_(np.floor(borders[0] * bound))
+    _, _, antimask_i, antimask_j = get_image_mask_indices(target_image, hole_val, center_radius=disc_radius)
+
+    px_count = antimask_i.size
+
+    init_image_norm = np.clip((init_image - init_background) / init_flux, 0, None)
+    step_sizes = np.array(
+        (
+            0.01,
+            0.01,
+        )
+    )
+    scale_factor = init_flux / 10
+    x0 = np.array((init_flux / scale_factor, init_background))
+
+    init_chisq = (
+        poisson_chisq(target_image[antimask_i, antimask_j], init_image[antimask_i, antimask_j]) / px_count
+    )
+    with open(log_filename, "a") as fle:
+        print(f"hello optimizer\ninitial chisq: {init_chisq:.2f}", file=fle)
+
+    res = sp_opt.minimize(
+        chisq_scipy_minimize_flux_bg,
+        x0,
+        (target_image, init_image_norm, antimask_i, antimask_j, scale_factor),
+        jac="3-point",
+        options={"finite_diff_rel_step": step_sizes},
+        tol=1e-2,
+        callback=minimize_callback,
+    )
+
+    with open(log_filename, "a") as fle:
+        print(res, file=fle)
+
+    res.x[0] *= scale_factor
+    return res
+
+
+def find_aberrations(
+    data_file,
+    log_file,
+    scanum,
+    response_matrix,
+    hole_val,
+    catalog,
+    catalog_type,
+    wl_band,
+    wl_band_name,
+    ps_size,
+    dense_ps_size,
+    step,
+    borders,
+    seed,
+    ovsamp=8,
+):
+    """
+    Finds aberrations given a data file and a catalog of stars (xy only at this time)
+    """
+
+    def get_star(filename, scanum, x_px, y_px, ps_size):  # no interpolation
+        img = None
+        softbias = None
+        bkgndvar = None
+        eqvgain = None
+
+        with asp.io.fits.open(f"~/simdata/{filename}") as hdul:
+            img = hdul[scanum].data
+            softbias = hdul[0].header["SOFTBIAS"]
+            bkgndvar = hdul[scanum].header["BKGNDVAR"]
+            eqvgain = hdul[scanum].header["EQVGAIN"]
+
+        half_side = ps_size // 2
+        cutout = img[(y_px - half_side) : (y_px + half_side), (x_px - half_side) : (x_px + half_side)]
+        bkg = bkgndvar * eqvgain**2
+        px_type = cutout.dtype
+        cutout_cast = np.int_(cutout)
+        cutout_nobg = np.clip((cutout_cast - softbias) * eqvgain + bkg, 0, None)
+        # cutout_nobg = np.clip( ( cutout_cast - SOFTBIAS )*EQVGAIN, 0, None )
+
+        return cutout_nobg.astype(px_type), bkg
+
+    bound = ps_size // 2
+    center = np.array((ps_size // 2, ps_size // 2))
+    dense_bound = dense_ps_size // 2
+    dense_center = np.array((dense_ps_size // 2, dense_ps_size // 2))
+
+    object_count = catalog.shape[0]
+    zernikes = np.zeros((object_count, 5))
+    flux_bg_array = np.zeros((object_count, 2))
+    for i in np.arange(object_count):
+        coords = catalog[i]
+        if catalog_type == "radec":
+            # turn ra and dec into xy using the SCA's WCS
+            return None
+        elif catalog_type != "xy":
+            # error
+            raise ValueError("Catalog type must be xy or radec!")
+
+        image_analyze, predict_background = get_star(data_file, scanum, coords[0], coords[1], ps_size)
+        predict_flux = 5e8
+        init_aberrations = guess_aberrations(
+            image_analyze,
+            response_matrix,
+            hole_val,
+            scanum,
+            wl_band,
+            wl_band_name,
+            seed,
+            step,
+            dense_ps_size,
+            dense_bound,
+            dense_center,
+            borders,
+            ovsamp=ovsamp,
+        )
+        guess_psf = (
+            generate_model_psf(
+                scanum,
+                0,
+                0,
+                predict_flux,
+                ps_size,
+                ps_size,
+                wl_band,
+                wl_band_name,
+                seed,
+                extra_aberrations=init_aberrations,
+                ovsamp=ovsamp,
+            )
+            + predict_background
+        )
+
+        with open(log_file, "w") as fle:
+            print("hello aberration finder", file=fle)
+
+        res_fluxbg = fit_flux_bg(
+            image_analyze, guess_psf, predict_flux, predict_background, hole_val, log_file, bound, borders
+        )
+        print(res_fluxbg)
+        res = fit_aberrations(
+            image_analyze,
+            response_matrix,
+            hole_val,
+            scanum,
+            wl_band,
+            wl_band_name,
+            seed,
+            step,
+            bound,
+            center,
+            dense_ps_size,
+            dense_bound,
+            dense_center,
+            borders,
+            log_file,
+            data_file,
+            aberrations_only=True,
+            predict_flux=res_fluxbg.x[0],
+            predict_background=res_fluxbg.x[1],
+            ovsamp=ovsamp,
+        )
+        flux_bg_array[i] = res_fluxbg.x
+        zernikes[i] = res.x
+
+    return flux_bg_array, zernikes
