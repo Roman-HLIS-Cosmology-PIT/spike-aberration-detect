@@ -379,7 +379,17 @@ def get_image_mask_indices(
 
 
 def chisq_scipy_minimize(
-    x, sim_image_raw, scanum, wl_band, wl_band_name, ps_size, seed, antimask_i, antimask_j, scale_factor
+    x,
+    sim_image_raw,
+    scanum,
+    wl_band,
+    wl_band_name,
+    ps_size,
+    seed,
+    antimask_i,
+    antimask_j,
+    scale_factor,
+    ovsamp=8,
 ):
     """
     scipy-compatible chi-square calculator for image fitting.
@@ -401,6 +411,7 @@ def chisq_scipy_minimize(
             seed,
             extra_aberrations=extra_aberrations,
             postprocess=False,
+            ovsamp=ovsamp,
         )
         + background
     )
@@ -413,7 +424,18 @@ def chisq_scipy_minimize(
 
 
 def chisq_scipy_minimize_aberrations_only(
-    x, sim_image_raw, scanum, wl_band, wl_band_name, ps_size, seed, antimask_i, antimask_j, flux, background
+    x,
+    sim_image_raw,
+    scanum,
+    wl_band,
+    wl_band_name,
+    ps_size,
+    seed,
+    antimask_i,
+    antimask_j,
+    flux,
+    background,
+    ovsamp=8,
 ):
     """
     scipy-compatible chi-square calculator for image fitting without flux and background parameters.
@@ -432,6 +454,7 @@ def chisq_scipy_minimize_aberrations_only(
             seed,
             extra_aberrations=x,
             postprocess=False,
+            ovsamp=ovsamp,
         )
         + background
     )
@@ -477,6 +500,7 @@ def guess_aberrations(
     dense_bound,
     dense_center,
     borders,
+    ovsamp=8,
 ):
     """
     Guesses the aberrations in a PSF given the image and a response matrix.
@@ -490,7 +514,17 @@ def guess_aberrations(
 
     big_flux = 1e14
     psf_ideal = generate_model_psf(
-        scanum, 0, 0, big_flux, ps_size, ps_size, wl_band, wl_band_name, seed, postprocess=False
+        scanum,
+        0,
+        0,
+        big_flux,
+        ps_size,
+        ps_size,
+        wl_band,
+        wl_band_name,
+        seed,
+        postprocess=False,
+        ovsamp=ovsamp,
     )
     psf_ideal_interp = spikes.interpolate_image(np.arcsinh(psf_ideal), dense_ps_size)
     ideal_spikes = spikes.find_spikes(psf_ideal_interp, step, dense_bound, dense_center, borders)
@@ -525,6 +559,7 @@ def fit_aberrations(
     aberrations_only=False,
     predict_flux=5e8,
     predict_background=0,
+    ovsamp=8,
 ):
     """
     Attempts to find the aberrations in a PSF image.
@@ -549,6 +584,7 @@ def fit_aberrations(
         dense_bound,
         dense_center,
         borders,
+        ovsamp=ovsamp,
     )
 
     def minimize_callback(intermediate_result: sp_opt.OptimizeResult):
@@ -573,6 +609,7 @@ def fit_aberrations(
             seed,
             extra_aberrations=predict_aberrations,
             postprocess=False,
+            ovsamp=ovsamp,
         )
         + predict_background
     )
@@ -611,6 +648,7 @@ def fit_aberrations(
                 antimask_j,
                 predict_flux,
                 predict_background,
+                ovsamp,
             ),
             jac="3-point",
             options={"finite_diff_rel_step": step_sizes},
@@ -630,6 +668,7 @@ def fit_aberrations(
                 seed,
                 extra_aberrations=res.x,
                 postprocess=False,
+                ovsamp=ovsamp,
             )
             + predict_background
         )
@@ -653,6 +692,7 @@ def fit_aberrations(
                 antimask_i,
                 antimask_j,
                 scale_factor,
+                ovsamp,
             ),
             jac="3-point",
             options={"finite_diff_rel_step": step_sizes},
@@ -674,6 +714,7 @@ def fit_aberrations(
                 seed,
                 extra_aberrations=res.x[2:],
                 postprocess=False,
+                ovsamp=ovsamp,
             )
             + res.x[1]
         )
@@ -691,6 +732,7 @@ def fit_aberrations(
             print(f"guess spikes: {guess_spikes}", file=fle)
             print(
                 f"ps_size: {ps_size}\n"
+                f"ovsamp: {ovsamp}\n"
                 f"dense_ps_size: {dense_ps_size}\n"
                 f"step: {step}\n"
                 f"bound: {bound}\n"
@@ -775,6 +817,7 @@ def find_aberrations(
     step,
     borders,
     seed,
+    ovsamp=8,
 ):
     """
     Finds aberrations given a data file and a catalog of stars (xy only at this time)
@@ -834,6 +877,7 @@ def find_aberrations(
             dense_bound,
             dense_center,
             borders,
+            ovsamp=ovsamp,
         )
         guess_psf = (
             generate_model_psf(
@@ -847,6 +891,7 @@ def find_aberrations(
                 wl_band_name,
                 seed,
                 extra_aberrations=init_aberrations,
+                ovsamp=ovsamp,
             )
             + predict_background
         )
@@ -878,6 +923,7 @@ def find_aberrations(
             aberrations_only=True,
             predict_flux=res_fluxbg.x[0],
             predict_background=res_fluxbg.x[1],
+            ovsamp=ovsamp,
         )
         flux_bg_array[i] = res_fluxbg.x
         zernikes[i] = res.x
