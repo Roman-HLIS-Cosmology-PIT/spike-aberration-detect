@@ -1,4 +1,3 @@
-import astropy as asp
 import numpy as np
 import scipy.interpolate as sp_itp
 import scipy.optimize as sp_opt
@@ -727,7 +726,6 @@ def fit_aberrations(
     with open(log_filename, "a") as fle:
         print(res, file=fle)
         with np.printoptions(precision=4):
-            print(f"simdata spikes: {guess_spikes}", file=fle)
             print(f"fit spikes: {opt_spikes}", file=fle)
             print(f"guess spikes: {guess_spikes}", file=fle)
             print(
@@ -740,7 +738,7 @@ def fit_aberrations(
                 f"dense bound: {dense_bound}\n"
                 f"dense center: {dense_center}\n"
                 f"borders: {borders}\n"
-                f"scale factor: {scale_factor}"
+                f"scale factor: {scale_factor}\n"
                 f"threshold: 0.5\n"
                 f"WFI {scanum}\n"
                 f"center radius {disc_radius}\n"
@@ -803,7 +801,7 @@ def fit_flux_bg(
 
 
 def find_aberrations(
-    data_file,
+    sca_image,
     log_file,
     scanum,
     response_matrix,
@@ -818,32 +816,11 @@ def find_aberrations(
     borders,
     seed,
     ovsamp=8,
+    data_filename="",
 ):
     """
     Finds aberrations given a data file and a catalog of stars (xy only at this time)
     """
-
-    def get_star(filename, scanum, x_px, y_px, ps_size):  # no interpolation
-        img = None
-        softbias = None
-        bkgndvar = None
-        eqvgain = None
-
-        with asp.io.fits.open(f"~/simdata/{filename}") as hdul:
-            img = hdul[scanum].data
-            softbias = hdul[0].header["SOFTBIAS"]
-            bkgndvar = hdul[scanum].header["BKGNDVAR"]
-            eqvgain = hdul[scanum].header["EQVGAIN"]
-
-        half_side = ps_size // 2
-        cutout = img[(y_px - half_side) : (y_px + half_side), (x_px - half_side) : (x_px + half_side)]
-        bkg = bkgndvar * eqvgain**2
-        px_type = cutout.dtype
-        cutout_cast = np.int_(cutout)
-        cutout_nobg = np.clip((cutout_cast - softbias) * eqvgain + bkg, 0, None)
-        # cutout_nobg = np.clip( ( cutout_cast - SOFTBIAS )*EQVGAIN, 0, None )
-
-        return cutout_nobg.astype(px_type), bkg
 
     bound = ps_size // 2
     center = np.array((ps_size // 2, ps_size // 2))
@@ -862,8 +839,14 @@ def find_aberrations(
             # error
             raise ValueError("Catalog type must be xy or radec!")
 
-        image_analyze, predict_background = get_star(data_file, scanum, coords[0], coords[1], ps_size)
+        half_side = ps_size // 2
+        image_analyze = sca_image[
+            (coords[1] - half_side) : (coords[1] + half_side),
+            (coords[0] - half_side) : (coords[0] + half_side),
+        ]
+
         predict_flux = 5e8
+        predict_background = 50
         init_aberrations = guess_aberrations(
             image_analyze,
             response_matrix,
@@ -919,7 +902,7 @@ def find_aberrations(
             dense_center,
             borders,
             log_file,
-            data_file,
+            data_filename,
             aberrations_only=True,
             predict_flux=res_fluxbg.x[0],
             predict_background=res_fluxbg.x[1],
