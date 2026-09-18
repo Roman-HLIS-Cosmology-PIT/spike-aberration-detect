@@ -500,6 +500,7 @@ def guess_aberrations(
     dense_center,
     borders,
     ovsamp=8,
+    threshold=0.5,
 ):
     """
     Guesses the aberrations in a PSF given the image and a response matrix.
@@ -509,7 +510,9 @@ def guess_aberrations(
     target_image_fixed = spikes.interpolate_image(
         patch_image_holes(np.arcsinh(target_image), hole_val), dense_ps_size
     )
-    target_spikes = spikes.find_spikes(target_image_fixed, step, dense_bound, dense_center, borders=borders)
+    target_spikes = spikes.find_spikes(
+        target_image_fixed, step, dense_bound, dense_center, borders=borders, threshold=threshold
+    )
 
     big_flux = 1e14
     psf_ideal = generate_model_psf(
@@ -526,7 +529,9 @@ def guess_aberrations(
         ovsamp=ovsamp,
     )
     psf_ideal_interp = spikes.interpolate_image(np.arcsinh(psf_ideal), dense_ps_size)
-    ideal_spikes = spikes.find_spikes(psf_ideal_interp, step, dense_bound, dense_center, borders)
+    ideal_spikes = spikes.find_spikes(
+        psf_ideal_interp, step, dense_bound, dense_center, borders, threshold=threshold
+    )
 
     dth_vec = target_spikes - ideal_spikes
     predict_aberrations = np.linalg.inv(response_matrix.T @ response_matrix) @ response_matrix.T @ dth_vec
@@ -559,6 +564,7 @@ def fit_aberrations(
     predict_flux=5e8,
     predict_background=0,
     ovsamp=8,
+    threshold=0.5,
 ):
     """
     Attempts to find the aberrations in a PSF image.
@@ -584,6 +590,7 @@ def fit_aberrations(
         dense_center,
         borders,
         ovsamp=ovsamp,
+        threshold=threshold,
     )
 
     def minimize_callback(intermediate_result: sp_opt.OptimizeResult):
@@ -613,14 +620,16 @@ def fit_aberrations(
         + predict_background
     )
     guess_psf_interp = spikes.interpolate_image(np.arcsinh(guess_psf), dense_ps_size)
-    guess_spikes = spikes.find_spikes(guess_psf_interp, step, dense_bound, dense_center, borders)
+    guess_spikes = spikes.find_spikes(
+        guess_psf_interp, step, dense_bound, dense_center, borders, threshold=threshold
+    )
 
     good_px_count = antimask_i.size
     init_chisq = (
         poisson_chisq(target_image[antimask_i, antimask_j], guess_psf[antimask_i, antimask_j]) / good_px_count
     )
 
-    with open(log_filename, "w") as fle:
+    with open(log_filename, "a") as fle:
         print(f"hello optimizer\ninitial chisq: {init_chisq:.2f}", file=fle)
         print(f"Inital aberrations: {predict_aberrations}", file=fle)
 
@@ -720,7 +729,9 @@ def fit_aberrations(
 
     # opt_psf = response.generate_model_psf( WFI, 0, 0, np.exp( res.x[0] ), ps_size, ps_size, wl_band, wl_band_name, seed, extra_aberrations=res.x[1:], postprocess=False ) + background
     opt_psf_interp = spikes.interpolate_image(opt_psf, dense_ps_size)
-    opt_spikes = spikes.find_spikes(opt_psf_interp, step, dense_bound, dense_center, borders=borders)
+    opt_spikes = spikes.find_spikes(
+        opt_psf_interp, step, dense_bound, dense_center, borders=borders, threshold=threshold
+    )
 
     # I will change this to yaml later, there is much more information needed to completely specify everything
     with open(log_filename, "a") as fle:
@@ -816,6 +827,7 @@ def find_aberrations(
     borders,
     seed,
     ovsamp=8,
+    threshold=0.5,
     data_filename="",
 ):
     """
@@ -861,6 +873,7 @@ def find_aberrations(
             dense_center,
             borders,
             ovsamp=ovsamp,
+            threshold=threshold,
         )
         guess_psf = (
             generate_model_psf(
@@ -907,6 +920,7 @@ def find_aberrations(
             predict_flux=res_fluxbg.x[0],
             predict_background=res_fluxbg.x[1],
             ovsamp=ovsamp,
+            threshold=threshold,
         )
         flux_bg_array[i] = res_fluxbg.x
         zernikes[i] = res.x
