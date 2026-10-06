@@ -61,9 +61,7 @@ def test_find_spikes():
         )
     )
 
-    ideal_sums, _, _, ideal_spikes = find_spikes(
-        psf_ideal, step, bound, center, borders=borders, verbose=True
-    )
+    ideal_spikes, _ = find_spikes(psf_ideal, step, bound, center, borders=borders, verbose=True)
 
     assert ideal_spikes.size == 12
     assert np.all(np.diff(ideal_spikes) > 5.0)
