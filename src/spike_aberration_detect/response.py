@@ -991,6 +991,7 @@ def find_aberrations(
                 seed,
                 extra_aberrations=init_aberrations,
                 ovsamp=ovsamp,
+                postprocess=False,
             )
             + predict_background
         )
