@@ -163,8 +163,7 @@ def generate_model_psf(
     pixel_size = ovsamp
     obj.compute_poly_psf(
         # optical_psf_only=True,
-        use_postage_stamp_size=ps_size,
-        postage_stamp_size=ps_size,
+        pupil_stamp_size=ps_size,
         ovsamp=ovsamp,
         use_filter=wl_band_name,
         extra_aberrations=extra_aberrations,
@@ -486,6 +485,51 @@ def chisq_scipy_minimize_flux_bg(
     return chisq
 
 
+def hessinv_flux_bg(x, data, norm_means, antimask_i, antimask_j, scale_factor):
+    """
+    Finds the inverse hessian of the poisson distribution chi-squared with respect to the flux and background
+    of the PSF.
+    """
+    flux = x[0]
+    background = x[1]
+    data = data[antimask_i, antimask_j]
+    norm_means = norm_means[antimask_i, antimask_j]
+    px_count = antimask_i.size
+    ln_2deriv_part = data / (background + (scale_factor * flux * norm_means)) ** 2
+    d2_db2 = np.sum(2 * ln_2deriv_part) / px_count
+    d2_df2 = np.sum(2 * (scale_factor * norm_means) ** 2 * ln_2deriv_part) / px_count
+    d2_dfdb = np.sum(2 * (scale_factor * norm_means) * ln_2deriv_part) / px_count
+    determinant = (d2_db2 * d2_df2) - d2_dfdb**2
+    return (1.0 / determinant) * np.array(
+        (
+            (
+                d2_db2,
+                -d2_dfdb,
+            ),
+            (
+                -d2_dfdb,
+                d2_df2,
+            ),
+        )
+    )
+
+
+def grad_chisq_flux_bg(x, data, norm_means, antimask_i, antimask_j, scale_factor):
+    """
+    Finds the gradient of the poisson distribution chi-squared with respect to the flux and background
+    of the PSF.
+    """
+    flux = x[0]
+    background = x[1]
+    data = data[antimask_i, antimask_j]
+    px_count = antimask_i.size
+    norm_means = norm_means[antimask_i, antimask_j]
+    ln_deriv_part = data / (background + (scale_factor * flux * norm_means))
+    d_db = 2 * np.sum(1 - ln_deriv_part)
+    d_df = 2 * scale_factor * np.sum(norm_means * (1 - ln_deriv_part))
+    return np.array((d_df, d_db)) / px_count
+
+
 def guess_aberrations(
     target_image: np.ndarray,
     response_matrix,
@@ -761,7 +805,7 @@ def fit_aberrations(
 
 
 # predicted flux and background will be specified along with the initial image. This is enforced.
-def fit_flux_bg(
+def fit_flux_bg_old(
     target_image, init_image, init_flux, init_background, hole_val, log_filename, bound, borders=(0.0, 1.0)
 ):
     """
@@ -808,6 +852,65 @@ def fit_flux_bg(
         print(res, file=fle)
 
     res.x[0] *= scale_factor
+    return res
+
+
+def fit_flux_bg(
+    target_image, init_image, init_flux, init_background, hole_val, log_filename, bound, borders=(0.0, 1.0)
+):
+    """
+    Attempts to find the flux and background value of a PSF image.
+    """
+    disc_radius = np.int_(np.floor(borders[0] * bound))
+    _, _, antimask_i, antimask_j = get_image_mask_indices(target_image, hole_val, center_radius=disc_radius)
+    init_image_norm = np.clip((init_image - init_background) / init_flux, 0, None)
+
+    scale_factor = init_flux / 10
+    x0 = np.array((init_flux / scale_factor, init_background))
+
+    args = (target_image, init_image_norm, antimask_i, antimask_j, scale_factor)
+    with open(log_filename, "a") as fle:
+        print("hello optimizer", file=fle)
+
+    tol = 1e-3
+    current_deriv = tol * 10
+    n = 0
+    max_n = 200
+    relax = -0.7
+    current_chisq = None
+    current_hessinv = None
+    x = np.copy(x0)
+    while n < max_n and np.linalg.norm(current_deriv) > tol:
+        current_chisq = chisq_scipy_minimize_flux_bg(x, *args)
+        current_deriv = grad_chisq_flux_bg(x, *args)
+        current_hessinv = hessinv_flux_bg(x, *args)
+
+        with open(log_filename, "a") as fle:
+            print(f"chisq: {current_chisq:.2f}\n  x: {x}\n  gradient: {current_deriv}", file=fle)
+
+        low_limit = 0.1 * x
+        high_limit = 10.0 * x
+        proposed_step = relax * (current_hessinv @ current_deriv)
+        x += proposed_step
+        x = np.clip(x, low_limit, high_limit)
+        n += 1
+
+    x[0] *= scale_factor
+    res = sp_opt.OptimizeResult()
+    res.x = x
+    res.fun = current_chisq
+    res.jac = current_deriv
+    res.hess_inv = current_hessinv
+    res.nfev = n
+    with open(log_filename, "a") as fle:
+        print(
+            f"\nfinal params: {x}\n"
+            f"final chisq: {current_chisq}\n"
+            f"gradient: {current_deriv}\n"
+            f"inverse hessian:\n{current_hessinv}",
+            file=fle,
+        )
+
     return res
 
 
