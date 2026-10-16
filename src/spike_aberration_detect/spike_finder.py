@@ -76,11 +76,14 @@ def find_spikes(
         (min(S(theta)) + max(S(theta)))/2.
     verbose : boolean, optional
         Whether to return more information than an array of spike angles. If set to true,
-        this function returns S(theta), the cutoff value, all angles part of detected spikes,
-        and the spike angles.
+        this function returns all the extra information so the user can see how spikes were found.
 
     Returns
     -------
+    spike_list : array of float
+        Array of found spike angles. Each group of spikes has a minimum and maximum angle, found by linearly
+        interpolating S(theta) and intersecting it with the cutoff value. The midpoint between the minimum
+        and maximum is the measured angle of the spike.
     sums : array of float, optional
         Only returned if verbose is True. This array is the sum over each line as a function of line
         angle.
@@ -89,10 +92,24 @@ def find_spikes(
         the spikes.
     cutoff : float, optional
         Sums below this value are not part of spikes, and values above it are part of spikes.
-    spike_list : array of float
-        Array of found spike angles. Each group of spikes has a minimum and maximum angle, found by linearly
-        interpolating S(theta) and intersecting it with the cutoff value. The midpoint between the minimum
-        and maximum is the measured angle of the spike.
+    verbose_dict : dictionary
+        If verbose is set to true, this dictionary will be returned containing information about how the
+        spikes were found. verbose_dict contains:
+        - "sums" : array of float
+            This array is the sum over each line as a function of line angle.
+        - "spike_angles" : tuple of array of float
+            All angles that are part of detected spikes. Each element of the tuple is corresponds to one of
+            the spikes.
+        - "cutoff" : float
+            Sums below this value are not part of supposed spikes, and values above it are part of spikes.
+        - "spike_list" : array of float
+            Same as the spike list already returned.
+        - "psf_folded" : 2D array of float
+        - "split_sums" : 2D array of float
+        - "split_cutoffs" : array of float
+        - "spike_indices_naive" : array of float
+        - "verdict_matrix" : 2D array of boolean
+        - "verdicts" : array of boolean
     """
     angles = np.linspace(0, 360, num=np.int32(360.0 / step), endpoint=False)
 
@@ -129,7 +146,6 @@ def find_spikes(
     cutoff = np.min(sums) + (diff * threshold)
     spike_indices = np.where(sums > cutoff)[0]
     spike_angles = angles[spike_indices]
-    # print( np.diff( spike_angles ) )
 
     # try 3 degrees to tell differing spikes apart for now
     spike_angle_discriminator = 3.0
@@ -137,9 +153,9 @@ def find_spikes(
     spike_groups = np.split(spike_angles, borders + 1)
     spike_group_indices = np.split(spike_indices, borders + 1)
 
-    # print(f"Cutoff of {cutoff:.3f}")
     # unfortunately this for loop is necessary unless theres a convenient package for jagged arrays
     spike_list = np.zeros(len(spike_groups))
+    spike_indices_naive = np.zeros(len(spike_groups), dtype=np.int_)
     for i in np.arange(len(spike_groups)):
         idx_min_r = spike_group_indices[i][0]
         idx_max_l = spike_group_indices[i][-1]
@@ -153,19 +169,55 @@ def find_spikes(
         th_min = ((cutoff - sums[idx_min_l]) / slope_left) + angles[idx_min_l]
         th_max = ((cutoff - sums[idx_max_l]) / slope_right) + angles[idx_max_l]
 
-        # print( f'{sums[idx_min_l]:.3f}, {sums[idx_min_r]:.3f} and {sums[idx_max_l]:.3f}, {sums[idx_max_r]:.3f}' )
-        # print(
-        #     f"{angles[idx_min_l]:.2f}, {angles[idx_min_r]:.2f} and {angles[idx_max_l]:.2f}, {angles[idx_max_r]:.2f}. interpolated as {th_min:.2f}, {th_max:.2f}"
-        # )
+        spike_angle_naive_idx = spike_groups[i].size // 2
+        spike_angle_naive = spike_groups[i][spike_angle_naive_idx]
 
-        # spike_list[i] = np.median( spike_groups[i] )
+        spike_indices_naive[i] = np.where(angles == spike_angle_naive)[0][0]
         spike_list[i] = (th_min + th_max) / 2.0
 
     # print( spike_list )
+
+    n_regions = 4
+    psf_folded = line_vals[:, range_low:range_high]
+    n = psf_folded.shape[1]
+
+    if n % n_regions != 0:
+        remaining = n_regions - (n % n_regions)
+        padding = np.zeros((psf_folded.shape[0], remaining))
+        psf_folded = np.concatenate((psf_folded, padding), axis=-1)
+
+    regions = np.array_split(psf_folded, n_regions, axis=-1)
+    regions_ndarray = np.stack((*regions,))
+    split_sums = np.sum(regions_ndarray, axis=-1)
+
+    outlier_cutoffs_high = np.percentile(split_sums, 98.0, axis=-1)
+    outlier_cutoffs_low = np.percentile(split_sums, 2.0, axis=-1)
+
+    verifier_threshold = threshold / 1.15
+    split_diffs = outlier_cutoffs_high - outlier_cutoffs_low
+    split_cutoffs = outlier_cutoffs_low + (split_diffs * verifier_threshold)
+
+    angle_in_region_i, angle_in_region_j = np.meshgrid(np.arange(n_regions), spike_indices_naive)
+
+    verdict_matrix = split_sums[angle_in_region_i, angle_in_region_j] > split_cutoffs[np.newaxis, :]
+    verdicts = np.sum(verdict_matrix, axis=-1) >= (n_regions - 1)
+
     if verbose:
-        return sums, spike_angles, cutoff, spike_list
+        verbose_dict = {
+            "sums": sums,
+            "spike_angles": spike_angles,
+            "cutoff": cutoff,
+            "spike_list": spike_list[verdicts],
+            "psf_folded": psf_folded,
+            "split_sums": split_sums,
+            "split_cutoffs": split_cutoffs,
+            "spike_indices_naive": spike_indices_naive,
+            "verdict_matrix": verdict_matrix,
+            "verdicts": verdicts,
+        }
+        return spike_list[verdicts], verbose_dict
     else:
-        return spike_list
+        return spike_list[verdicts]
 
 
 def draw_ray(ax, angle: np.float64, bound: np.int_, center=(0, 0), borders=(0.0, 1.0), **kwargs):
