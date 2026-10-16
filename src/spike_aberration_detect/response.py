@@ -17,7 +17,6 @@ def build_response_matrix(
     ideal_spike_angles: np.ndarray,
     ps_size: np.int_,
     dense_ps_size: np.int_,
-    seed: np.int_,
     step: np.float64,
     bound: np.int_,
     center,
@@ -87,12 +86,13 @@ def build_response_matrix(
             dense_ps_size,
             wl_band,
             wl_band_name,
-            seed,
+            0,
             extra_aberrations=extra_aberrations,
             ovsamp=ovsamp,
+            postprocess=False,
         )
 
-        psf = np.arcsinh(psf_lin)
+        psf = np.arcsinh(spikes.interpolate_image(psf_lin, dense_ps_size))
 
         spike_list = spikes.find_spikes(psf, step, bound, center, **kwargs)
         resp_matrix[:, i] = (spike_list - ideal_spike_angles) / aberrations[i]
