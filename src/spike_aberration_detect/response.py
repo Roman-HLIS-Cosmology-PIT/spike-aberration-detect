@@ -945,6 +945,10 @@ def find_aberrations(
     object_count = catalog.shape[0]
     zernikes = np.zeros((object_count, 5))
     flux_bg_array = np.zeros((object_count, 2))
+
+    with open(log_file, "w") as fle:
+        print("hello aberration finder", file=fle)
+
     for i in np.arange(object_count):
         coords = catalog[i]
         if catalog_type == "radec":
@@ -996,8 +1000,8 @@ def find_aberrations(
             + predict_background
         )
 
-        with open(log_file, "w") as fle:
-            print("hello aberration finder", file=fle)
+        with open(log_file, "a") as fle:
+            print(f"\nWFI {scanum}, pixel {coords}\n", file=fle)
 
         res_fluxbg = fit_flux_bg(
             image_analyze, guess_psf, predict_flux, predict_background, hole_val, log_file, bound, borders
