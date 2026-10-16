@@ -51,8 +51,6 @@ def build_response_matrix(
         Postage stamp size of the desired PSF, in native pixels.
     dense_ps_size : int
         Postage stamp size of the desired PSF after interpolation.
-    seed : int
-        Seed for numpy random number generation.
     step : float
         The increment angle between successive lines, in degrees.
     bound : int, optional
